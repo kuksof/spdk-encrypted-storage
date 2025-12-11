@@ -1,0 +1,72 @@
+{
+  "subsystems": [
+    {
+      "subsystem": "bdev",
+      "config": [
+        {
+          "method": "bdev_malloc_create",
+          "params": {
+            "name": "Malloc0",
+            "num_blocks": 262144,
+            "block_size": 512
+          }
+        },
+        {
+          "method": "bdev_crypto_create",
+          "params": {
+            "base_bdev_name": "Malloc0",
+            "name": "Crypto0",
+
+            "cipher": "AES_XTS",
+
+            "key":  "000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f",
+            "key2": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+
+          }
+        }
+      ]
+    },
+
+    {
+      "subsystem": "nvmf",
+      "config": [
+        {
+          "method": "nvmf_create_transport",
+          "params": {
+            "trtype": "TCP",
+            "num_shared_buffers": 256
+          }
+        },
+        {
+          "method": "nvmf_create_subsystem",
+          "params": {
+            "nqn": "nqn.2016-06.io.spdk:crypto",
+            "serial_number": "SPDK00000000000001",
+            "max_namespaces": 1,
+            "allow_any_host": true
+          }
+        },
+        {
+          "method": "nvmf_subsystem_add_ns",
+          "params": {
+            "nqn": "nqn.2016-06.io.spdk:crypto",
+            "namespace": {
+              "bdev_name": "Crypto0"
+            }
+          }
+        },
+        {
+          "method": "nvmf_subsystem_add_listener",
+          "params": {
+            "nqn": "nqn.2016-06.io.spdk:crypto",
+            "listen_address": {
+              "trtype": "TCP",
+              "traddr": "127.0.0.1",
+              "trsvcid": "4420"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

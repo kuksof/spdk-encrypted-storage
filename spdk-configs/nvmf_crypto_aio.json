@@ -1,0 +1,68 @@
+{
+  "subsystems": [
+    {
+      "subsystem": "bdev",
+      "config": [
+        {
+          "method": "bdev_aio_create",
+          "params": {
+            "name": "AIO_crypto_base",
+            "filename": "/tmp/crypto_backing",
+            "block_size": 512
+          }
+        },
+        {
+          "method": "bdev_crypto_create",
+          "params": {
+            "base_bdev_name": "AIO_crypto_base",
+            "name": "CryptoAIO",
+            "cipher": "AES_XTS",
+            "key":  "000102030405060708090a0b0c0d0e0f000102030405060708090a0b0c0d0e0f",
+            "key2": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+          }
+        }
+      ]
+    },
+    {
+      "subsystem": "nvmf",
+      "config": [
+        {
+          "method": "nvmf_create_transport",
+          "params": {
+            "trtype": "TCP"
+          }
+        },
+        {
+          "method": "nvmf_create_subsystem",
+          "params": {
+            "nqn": "nqn.2016-06.io.spdk:crypto-aio",
+            "serial_number": "SPDKCRYPTOAIO",
+            "max_namespaces": 1,
+            "allow_any_host": true
+          }
+        },
+        {
+          "method": "nvmf_subsystem_add_ns",
+          "params": {
+            "nqn": "nqn.2016-06.io.spdk:crypto-aio",
+            "namespace": {
+              "bdev_name": "CryptoAIO"
+            }
+          }
+        },
+        {
+          "method": "nvmf_subsystem_add_listener",
+          "params": {
+            "nqn": "nqn.2016-06.io.spdk:crypto-aio",
+            "listen_address": {
+              "trtype": "TCP",
+              "traddr": "127.0.0.1",
+              "trsvcid": "4420",
+              "adrfam": "IPv4"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

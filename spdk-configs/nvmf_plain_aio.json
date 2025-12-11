@@ -1,0 +1,58 @@
+{
+  "subsystems": [
+    {
+      "subsystem": "bdev",
+      "config": [
+        {
+          "method": "bdev_aio_create",
+          "params": {
+            "name": "AIO_plain",
+            "filename": "/tmp/plain_backing",
+            "block_size": 512
+          }
+        }
+      ]
+    },
+    {
+      "subsystem": "nvmf",
+      "config": [
+        {
+          "method": "nvmf_create_transport",
+          "params": {
+            "trtype": "TCP"
+          }
+        },
+        {
+          "method": "nvmf_create_subsystem",
+          "params": {
+            "nqn": "nqn.2016-06.io.spdk:plain",
+            "serial_number": "SPDKPLAINTGT",
+            "max_namespaces": 1,
+            "allow_any_host": true
+          }
+        },
+        {
+          "method": "nvmf_subsystem_add_ns",
+          "params": {
+            "nqn": "nqn.2016-06.io.spdk:plain",
+            "namespace": {
+              "bdev_name": "AIO_plain"
+            }
+          }
+        },
+        {
+          "method": "nvmf_subsystem_add_listener",
+          "params": {
+            "nqn": "nqn.2016-06.io.spdk:plain",
+            "listen_address": {
+              "trtype": "TCP",
+              "traddr": "127.0.0.1",
+              "trsvcid": "4420",
+              "adrfam": "IPv4"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
