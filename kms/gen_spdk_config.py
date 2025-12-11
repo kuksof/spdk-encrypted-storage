@@ -115,7 +115,7 @@ def main():
 
     print("[gen_spdk_config] KMS =", kms)
 
-    if args.new-keys:
+    if args.new_keys:
         print("[gen_spdk_crypto_config] Creating new DEKs...")
         meta1 = kms_create_key(kms)
         meta2 = kms_create_key(kms)
