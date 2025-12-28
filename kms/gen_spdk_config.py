@@ -19,6 +19,17 @@ def kms_get_dek(kms_url: str, key_id: str) -> str:
     data = resp.json()
     return data["dek_hex"]
 
+def kms_get_wrapped(kms_url: str, key_id: str) -> str:
+    r = requests.get(f"{kms_url}/keys/{key_id}", timeout=5)
+    r.raise_for_status()
+    return r.json()["wrapped_key"]
+
+def get_kek_hex(kms_url: str) -> str:
+    resp = requests.get(f"{kms_url}/kek", timeout=5)
+    resp.raise_for_status()
+    data = resp.json()
+    return data["kek_hex"]
+
 def validate_hex_key(key_hex: str) -> None:
     if len(key_hex) % 2 != 0:
         raise ValueError(f"Invalid DEK length: {len(key_hex)} (must be even)")
@@ -27,7 +38,7 @@ def validate_hex_key(key_hex: str) -> None:
             f"DEK must be 32 bytes (64 hex chars) but got {len(key_hex)} hex chars"
         )
 
-def build_spdk_config(key1_hex: str, key2_hex: str) -> dict:
+def build_spdk_config(key1: str, key2: str, kek_hex: str) -> dict:
     return {
         "subsystems": [
             {
@@ -47,8 +58,9 @@ def build_spdk_config(key1_hex: str, key2_hex: str) -> dict:
                             "base_bdev_name": "Malloc0",
                             "name": "Crypto0",
                             "cipher": "AES_XTS",
-                            "key": key1_hex,
-                            "key2": key2_hex
+                            "wrapped_key": key1,
+                            "wrapped_key2": key2,
+                            "kek_hex": kek_hex
                         }
                     }
                 ]
@@ -60,7 +72,7 @@ def build_spdk_config(key1_hex: str, key2_hex: str) -> dict:
                         "method": "nvmf_create_transport",
                         "params": {
                             "trtype": "TCP",
-                            "num_shared_buffers": 4096
+                            "num_shared_buffers": 1024
                         }
                     },
                     {
@@ -123,9 +135,6 @@ def main():
         key1_id = meta1["key_id"]
         key2_id = meta2["key_id"]
 
-        key1_hex = meta1["dek_hex"]
-        key2_hex = meta2["dek_hex"]
-
     else:
         if not args.key1_id or not args.key2_id:
             print("ERROR: Must provide --key1-id and --key2-id "
@@ -136,23 +145,24 @@ def main():
         key2_id = args.key2_id
 
         print(f"[gen_spdk_crypto_config] Fetching DEK for key1_id={key1_id}")
-        key1_hex = kms_get_dek(kms, key1_id)
 
         print(f"[gen_spdk_crypto_config] Fetching DEK for key2_id={key2_id}")
-        key2_hex = kms_get_dek(kms, key2_id)
 
-    validate_hex_key(key1_hex)
-    validate_hex_key(key2_hex)
 
-    config = build_spdk_config(key1_hex, key2_hex)
+    kek_hex = get_kek_hex(kms)
+
+    wrapped1_b64 = kms_get_wrapped(kms, key1_id)   # returns "wrapped"
+    wrapped2_b64 = kms_get_wrapped(kms, key2_id)
+    validate_hex_key(kek_hex)
+    config = build_spdk_config(wrapped1_b64, wrapped2_b64, kek_hex)
 
     with open(args.output, "w") as f:
         json.dump(config, f, indent=2)
 
     print("\n[gen_spdk_crypto_config] Config successfully written:")
     print("  path:", args.output)
-    print("  AES-XTS key1 size:", len(key1_hex) // 2, "bytes")
-    print("  AES-XTS key2 size:", len(key2_hex) // 2, "bytes")
+    print("  AES-XTS key1 size:", len(wrapped1_b64) // 2, "bytes")
+    print("  AES-XTS key2 size:", len(wrapped2_b64) // 2, "bytes")
     print("  key1_id =", key1_id)
     print("  key2_id =", key2_id)
     print("Done.")

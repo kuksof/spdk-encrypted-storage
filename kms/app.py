@@ -6,27 +6,37 @@ import uuid
 
 app = Flask(__name__)
 
-KEK = b'\x01' * 32  # 256-bit key (AES-256-GCM)
+KEK_HEX = "01" * 32  # 64 hex chars -> 32 bytes
+KEK = bytes.fromhex(KEK_HEX)
 
 KEYS = {}
 
+NONCE_LEN = 12  # must match SPDK parser: IV(12) + TAG(16) + CT
+
 def wrap_dek(plain_dek: bytes) -> str:
-    cipher = AES.new(KEK, AES.MODE_GCM)
+    nonce = get_random_bytes(NONCE_LEN)
+    cipher = AES.new(KEK, AES.MODE_GCM, nonce=nonce)
     ciphertext, tag = cipher.encrypt_and_digest(plain_dek)
-    blob = cipher.nonce + tag + ciphertext
+    blob = nonce + tag + ciphertext
     return base64.b64encode(blob).decode("ascii")
 
 def unwrap_dek(wrapped_b64: str) -> bytes:
     blob = base64.b64decode(wrapped_b64)
-    nonce = blob[:16]
-    tag = blob[16:32]
-    ciphertext = blob[32:]
+
+    nonce = blob[:NONCE_LEN]
+    tag = blob[NONCE_LEN:NONCE_LEN + 16]
+    ciphertext = blob[NONCE_LEN + 16:]
+
     cipher = AES.new(KEK, AES.MODE_GCM, nonce=nonce)
     return cipher.decrypt_and_verify(ciphertext, tag)
 
 @app.get("/health")
 def health():
     return jsonify({"status": "alive"})
+
+@app.get("/kek")
+def get_kek():
+    return jsonify({"kek_hex": KEK_HEX})
 
 @app.post("/keys")
 def create_key():
@@ -38,8 +48,7 @@ def create_key():
 
     return jsonify({
         "key_id": key_id,
-        "dek_hex": dek.hex(),
-        "wrapped": wrapped
+        "wrapped_key": wrapped
     }), 201
 
 @app.get("/keys/<key_id>")
@@ -50,7 +59,7 @@ def get_key_metadata(key_id):
 
     return jsonify({
         "key_id": key_id,
-        "wrapped": meta["wrapped"]
+        "wrapped_key": meta["wrapped"]
     })
 
 @app.get("/keys/<key_id>/dek")
