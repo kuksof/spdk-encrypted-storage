@@ -33,16 +33,15 @@ cd kms
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python3 app.py
+python3 app.py --listen 127.0.0.1 --port 8080 --spdk-sock /var/tmp/spdk.sock
 ```
 KMS should be available at http://127.0.0.1:8080.
 
 2. Generate SPDK config from KMS
 ```bash
-python3 kms/gen_spdk_config.py \
+python3 kms/gen_spdk_config.py create \
   --kms-url http://127.0.0.1:8080 \
-  --new-keys \
-  --output spdk-configs/crypto.json
+  --out spdk-configs/crypto.json
 ```
 
 3. Run SPDK NVMe-oF target
@@ -53,11 +52,7 @@ sudo ./scripts/run_spdk.sh spdk-configs/crypto.json
 4. Connect as NVMe-oF initiator
 In a new terminal:
 ```bash
-sudo nvme connect \
-  -t tcp \
-  -a 127.0.0.1 \
-  -s 4420 \
-  -n nqn.2016-06.io.spdk:crypto
+sudo nvme connect -t tcp -a 127.0.0.1 -s 4420 -n nqn.2016-06.io.spdk:cnode1
 
 sudo nvme list
 ```
@@ -73,9 +68,20 @@ sudo fio --name=crypto_test \
   --iodepth=32 \
   --numjobs=1 \
   --time_based=1 \
-  --runtime=15 \
+  --runtime=60 \
   --ioengine=libaio \
   --direct=1
+```
+
+rekey:
+Replace <VOLUME_ID_FROM_CREATE> with your actual volume id 2nd step:
+```bash
+python3 kms/gen_spdk_config.py rekey \
+  --kms-url http://127.0.0.1:8080 \
+  --volume-id <VOLUME_ID_FROM_CREATE> \
+  --apply-spdk \
+  --spdk-sock /var/tmp/spdk.sock \
+  --crypto-bdev-name Crypto0
 ```
 
 ### Cleanup
