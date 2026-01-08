@@ -1,172 +1,176 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import sys
-import requests
+import urllib.request
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 
-def kms_create_key(kms_url: str) -> dict:
-    resp = requests.post(f"{kms_url}/keys", timeout=5)
-    resp.raise_for_status()
-    return resp.json()
+def http_json(method: str, url: str, payload: Optional[Dict[str, Any]] = None, timeout_s: float = 5.0) -> Dict[str, Any]:
+	data = None
+	headers = {"Content-Type": "application/json"}
+	if payload is not None:
+		data = json.dumps(payload).encode("utf-8")
+	req = urllib.request.Request(url=url, data=data, headers=headers, method=method)
+	with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+		body = resp.read().decode("utf-8")
+		return json.loads(body)
 
-def kms_get_dek(kms_url: str, key_id: str) -> str:
-    resp = requests.get(f"{kms_url}/keys/{key_id}/dek", timeout=5)
-    if resp.status_code == 404:
-        raise ValueError(f"KMS: key_id={key_id} not found")
-    resp.raise_for_status()
+def build_spdk_config(
+	malloc_name: str,
+	malloc_size_mb: int,
+	crypto_name: str,
+	cipher: str,
+	kek_hex: str,
+	wrapped_key: str,
+	wrapped_key2: str,
+	with_nvmf: bool,
+	nqn: str,
+	trtype: str,
+	traddr: str,
+	trsvcid: str,
+) -> Dict[str, Any]:
+	subsystems = []
+	bdev_cfg = []
+	bdev_cfg.append({
+		"method": "bdev_malloc_create",
+		"params": {
+			"name": malloc_name,
+			"num_blocks": (malloc_size_mb * 1024 * 1024) // 512,
+			"block_size": 512
+		}
+	})
+	bdev_cfg.append({
+		"method": "bdev_crypto_create",
+		"params": {
+			"base_bdev_name": malloc_name,
+			"name": crypto_name,
+			"cipher": cipher,
+			"wrapped_key": wrapped_key,
+			"wrapped_key2": wrapped_key2,
+			"kek_hex": kek_hex,
+		}
+	})
+	subsystems.append({"subsystem": "bdev", "config": bdev_cfg})
+	if with_nvmf:
+		nvmf_cfg = []
+		nvmf_cfg.append({
+			"method": "nvmf_create_transport",
+			"params": {
+				"trtype": trtype
+			}
+		})
+		nvmf_cfg.append({
+			"method": "nvmf_create_subsystem",
+			"params": {
+				"nqn": nqn,
+				"allow_any_host": True
+			}
+		})
+		nvmf_cfg.append({
+			"method": "nvmf_subsystem_add_listener",
+			"params": {
+				"nqn": nqn,
+				"listen_address": {
+					"trtype": trtype,
+					"traddr": traddr,
+					"trsvcid": trsvcid
+				}
+			}
+		})
+		nvmf_cfg.append({
+			"method": "nvmf_subsystem_add_ns",
+			"params": {
+				"nqn": nqn,
+				"namespace": {
+					"bdev_name": crypto_name
+				}
+			}
+		})
+		subsystems.append({"subsystem": "nvmf", "config": nvmf_cfg})
+	return {"subsystems": subsystems}
 
-    data = resp.json()
-    return data["dek_hex"]
+def cmd_create(args: argparse.Namespace) -> None:
+	kms_url = args.kms_url.rstrip("/")
+	out_path = Path(args.out)
+	r = http_json("POST", f"{kms_url}/v1/volumes", payload={})
+	if not r.get("ok"):
+		raise SystemExit(f"KMS error: {r}")
+	volume_id = r["volume_id"]
+	kek_hex = r["kek_hex"]
+	wrapped_key = r["wrapped_key"]
+	wrapped_key2 = r["wrapped_key2"]
+	cfg = build_spdk_config(
+		malloc_name=args.malloc_name,
+		malloc_size_mb=args.malloc_size_mb,
+		crypto_name=args.crypto_name,
+		cipher=args.cipher,
+		kek_hex=kek_hex,
+		wrapped_key=wrapped_key,
+		wrapped_key2=wrapped_key2,
+		with_nvmf=not args.no_nvmf,
+		nqn=args.nqn,
+		trtype=args.trtype,
+		traddr=args.traddr,
+		trsvcid=args.trsvcid,
+	)
+	out_path.parent.mkdir(parents=True, exist_ok=True)
+	out_path.write_text(json.dumps(cfg, indent=2), "utf-8")
+	print("OK")
+	print(f"volume_id={volume_id}")
+	print(f"wrote={out_path}")
+	if args.print_secrets:
+		print(f"kek_hex={kek_hex}")
+		print(f"wrapped_key={wrapped_key}")
+		print(f"wrapped_key2={wrapped_key2}")
 
-def kms_get_wrapped(kms_url: str, key_id: str) -> str:
-    r = requests.get(f"{kms_url}/keys/{key_id}", timeout=5)
-    r.raise_for_status()
-    return r.json()["wrapped_key"]
+def cmd_rekey(args: argparse.Namespace) -> None:
+	kms_url = args.kms_url.rstrip("/")
+	payload = {
+		"apply_spdk": bool(args.apply_spdk),
+		"spdk_sock": args.spdk_sock,
+		"crypto_bdev_name": args.crypto_bdev_name,
+	}
+	r = http_json("POST", f"{kms_url}/v1/volumes/{args.volume_id}/rekey", payload=payload)
+	if not r.get("ok"):
+		raise SystemExit(f"rekey failed: {r}")
+	print("OK")
+	print(f"volume_id={r['volume_id']}")
+	print(f"updated_at={r['updated_at']}")
+	if args.print_secrets:
+		print(f"kek_hex={r['kek_hex']}")
+		print(f"wrapped_key={r['wrapped_key']}")
+		print(f"wrapped_key2={r['wrapped_key2']}")
+	if "spdk" in r:
+		print("spdk=", json.dumps(r["spdk"], indent=2))
 
-def get_kek_hex(kms_url: str) -> str:
-    resp = requests.get(f"{kms_url}/kek", timeout=5)
-    resp.raise_for_status()
-    data = resp.json()
-    return data["kek_hex"]
-
-def validate_hex_key(key_hex: str) -> None:
-    if len(key_hex) % 2 != 0:
-        raise ValueError(f"Invalid DEK length: {len(key_hex)} (must be even)")
-    if len(key_hex) != 64:
-        raise ValueError(
-            f"DEK must be 32 bytes (64 hex chars) but got {len(key_hex)} hex chars"
-        )
-
-def build_spdk_config(key1: str, key2: str, kek_hex: str) -> dict:
-    return {
-        "subsystems": [
-            {
-                "subsystem": "bdev",
-                "config": [
-                    {
-                        "method": "bdev_malloc_create",
-                        "params": {
-                            "name": "Malloc0",
-                            "num_blocks": 262144,
-                            "block_size": 512
-                        }
-                    },
-                    {
-                        "method": "bdev_crypto_create",
-                        "params": {
-                            "base_bdev_name": "Malloc0",
-                            "name": "Crypto0",
-                            "cipher": "AES_XTS",
-                            "wrapped_key": key1,
-                            "wrapped_key2": key2,
-                            "kek_hex": kek_hex
-                        }
-                    }
-                ]
-            },
-            {
-                "subsystem": "nvmf",
-                "config": [
-                    {
-                        "method": "nvmf_create_transport",
-                        "params": {
-                            "trtype": "TCP",
-                            "num_shared_buffers": 1024
-                        }
-                    },
-                    {
-                        "method": "nvmf_create_subsystem",
-                        "params": {
-                            "nqn": "nqn.2016-06.io.spdk:crypto",
-                            "serial_number": "SPDK00000001",
-                            "max_namespaces": 1,
-                            "allow_any_host": True
-                        }
-                    },
-                    {
-                        "method": "nvmf_subsystem_add_ns",
-                        "params": {
-                            "nqn": "nqn.2016-06.io.spdk:crypto",
-                            "namespace": {
-                                "bdev_name": "Crypto0"
-                            }
-                        }
-                    },
-                    {
-                        "method": "nvmf_subsystem_add_listener",
-                        "params": {
-                            "nqn": "nqn.2016-06.io.spdk:crypto",
-                            "listen_address": {
-                                "trtype": "TCP",
-                                "traddr": "127.0.0.1",
-                                "trsvcid": "4420"
-                            }
-                        }
-                    }
-                ]
-            }
-        ]
-    }
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Generate SPDK JSON config with AES-XTS keys from KMS"
-    )
-    parser.add_argument("--kms-url", default="http://127.0.0.1:8080",
-                        help="Base URL of KMS")
-    parser.add_argument("--key1-id", help="Existing key_id for AES-XTS key1")
-    parser.add_argument("--key2-id", help="Existing key_id for AES-XTS key2")
-    parser.add_argument("--output", required=True,
-                        help="Where to write config.json")
-    parser.add_argument("--new-keys", action="store_true",
-                        help="Create two new DEK keys in KMS")
-
-    args = parser.parse_args()
-    kms = args.kms_url
-
-    print("[gen_spdk_config] KMS =", kms)
-
-    if args.new_keys:
-        print("[gen_spdk_crypto_config] Creating new DEKs...")
-        meta1 = kms_create_key(kms)
-        meta2 = kms_create_key(kms)
-
-        key1_id = meta1["key_id"]
-        key2_id = meta2["key_id"]
-
-    else:
-        if not args.key1_id or not args.key2_id:
-            print("ERROR: Must provide --key1-id and --key2-id "
-                  "if --new-keys is not used.")
-            sys.exit(1)
-
-        key1_id = args.key1_id
-        key2_id = args.key2_id
-
-        print(f"[gen_spdk_crypto_config] Fetching DEK for key1_id={key1_id}")
-
-        print(f"[gen_spdk_crypto_config] Fetching DEK for key2_id={key2_id}")
-
-
-    kek_hex = get_kek_hex(kms)
-
-    wrapped1_b64 = kms_get_wrapped(kms, key1_id)   # returns "wrapped"
-    wrapped2_b64 = kms_get_wrapped(kms, key2_id)
-    validate_hex_key(kek_hex)
-    config = build_spdk_config(wrapped1_b64, wrapped2_b64, kek_hex)
-
-    with open(args.output, "w") as f:
-        json.dump(config, f, indent=2)
-
-    print("\n[gen_spdk_crypto_config] Config successfully written:")
-    print("  path:", args.output)
-    print("  AES-XTS key1 size:", len(wrapped1_b64) // 2, "bytes")
-    print("  AES-XTS key2 size:", len(wrapped2_b64) // 2, "bytes")
-    print("  key1_id =", key1_id)
-    print("  key2_id =", key2_id)
-    print("Done.")
-
+def main() -> None:
+	p = argparse.ArgumentParser()
+	sub = p.add_subparsers(dest="cmd", required=True)
+	c = sub.add_parser("create", help="Create new volume in KMS and write SPDK JSON config")
+	c.add_argument("--kms-url", required=True)
+	c.add_argument("--out", required=True)
+	c.add_argument("--malloc-name", default="Malloc0")
+	c.add_argument("--malloc-size-mb", type=int, default=64)
+	c.add_argument("--crypto-name", default="Crypto0")
+	c.add_argument("--cipher", default="AES_XTS")
+	c.add_argument("--no-nvmf", action="store_true")
+	c.add_argument("--nqn", default="nqn.2016-06.io.spdk:cnode1")
+	c.add_argument("--trtype", default="tcp")
+	c.add_argument("--traddr", default="127.0.0.1")
+	c.add_argument("--trsvcid", default="4420")
+	c.add_argument("--print-secrets", action="store_true")
+	c.set_defaults(fn=cmd_create)
+	r = sub.add_parser("rekey", help="Rotate KEK (rewrap same DEK). Optionally apply to SPDK via RPC.")
+	r.add_argument("--kms-url", required=True)
+	r.add_argument("--volume-id", required=True)
+	r.add_argument("--apply-spdk", action="store_true")
+	r.add_argument("--spdk-sock", default="/var/tmp/spdk.sock")
+	r.add_argument("--crypto-bdev-name", default="Crypto0")
+	r.add_argument("--print-secrets", action="store_true")
+	r.set_defaults(fn=cmd_rekey)
+	args = p.parse_args()
+	args.fn(args)
 
 if __name__ == "__main__":
-    main()
+	main()
