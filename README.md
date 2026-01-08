@@ -87,7 +87,7 @@ python3 kms/gen_spdk_config.py rekey \
 ### Cleanup
 1. Disconnect NVMe-oF:
 ```bash
-sudo nvme disconnect -n nqn.2016-06.io.spdk:crypto
+sudo nvme disconnect -n nqn.2016-06.io.spdk:cnode1
 ```
 
 2. Stop SPDK target (Ctrl+C in its terminal) and stop KMS (Ctrl+C).
