@@ -17,7 +17,7 @@ def http_json(method: str, url: str, payload: Optional[Dict[str, Any]] = None, t
 		return json.loads(body)
 
 def build_spdk_config(
-	malloc_name: str,
+	dev_name: str,
 	malloc_size_mb: int,
 	crypto_name: str,
 	cipher: str,
@@ -33,17 +33,17 @@ def build_spdk_config(
 	subsystems = []
 	bdev_cfg = []
 	bdev_cfg.append({
-		"method": "bdev_malloc_create",
+		"method": "bdev_aio_create",
 		"params": {
-			"name": malloc_name,
-			"num_blocks": (malloc_size_mb * 1024 * 1024) // 512,
+			"name": dev_name,
+			"filename": "/dev/vda",
 			"block_size": 512
 		}
 	})
 	bdev_cfg.append({
 		"method": "bdev_crypto_create",
 		"params": {
-			"base_bdev_name": malloc_name,
+			"base_bdev_name": dev_name,
 			"name": crypto_name,
 			"cipher": cipher,
 			"wrapped_key": wrapped_key,
@@ -101,7 +101,7 @@ def cmd_create(args: argparse.Namespace) -> None:
 	wrapped_key = r["wrapped_key"]
 	wrapped_key2 = r["wrapped_key2"]
 	cfg = build_spdk_config(
-		malloc_name=args.malloc_name,
+		dev_name=args.dev_name,
 		malloc_size_mb=args.malloc_size_mb,
 		crypto_name=args.crypto_name,
 		cipher=args.cipher,
@@ -150,7 +150,7 @@ def main() -> None:
 	c = sub.add_parser("create", help="Create new volume in KMS and write SPDK JSON config")
 	c.add_argument("--kms-url", required=True)
 	c.add_argument("--out", required=True)
-	c.add_argument("--malloc-name", default="Malloc0")
+	c.add_argument("--dev-name", default="Malloc0")
 	c.add_argument("--malloc-size-mb", type=int, default=64)
 	c.add_argument("--crypto-name", default="Crypto0")
 	c.add_argument("--cipher", default="AES_XTS")
