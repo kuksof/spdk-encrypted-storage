@@ -55,6 +55,26 @@ def wrap_dek_aes256gcm(dek: bytes, kek: bytes) -> str:
 	blob = iv + tag + ct
 	return _b64e(blob)
 
+def unwrap_dek_aes256gcm(wrapped_b64: str, kek: bytes) -> bytes:
+	"""
+	Inverse of wrap_dek_aes256gcm.
+	Input: base64( IV(12) || TAG(16) || CT )
+	Output: plaintext DEK bytes
+	"""
+	if AESGCM is None:
+		raise RuntimeError("Install: pip install cryptography")
+	if len(kek) != 32:
+		raise ValueError("KEK must be 32 bytes for AES-256-GCM")
+
+	blob = base64.b64decode(wrapped_b64.encode("ascii"))
+	if len(blob) < 12 + 16 + 1:
+		raise ValueError("Wrapped blob is too short")
+	iv = blob[:12]
+	tag = blob[12:28]
+	ct = blob[28:]
+	aesgcm = AESGCM(kek)
+	return aesgcm.decrypt(iv, ct + tag, None)
+
 def load_state(path: Path) -> Dict[str, Any]:
 	if not path.exists():
 		return {"volumes": {}}
@@ -182,6 +202,8 @@ async def get_volume(req: web.Request) -> web.Response:
 	d = st.get("volumes", {}).get(vid)
 	if not d:
 		return web.json_response({"ok": False, "error": "volume not found"}, status=404)
+	v = volume_from_state(d)
+	return web.json_response({"ok": True, **v.public()})
 
 async def rekey_volume(req: web.Request) -> web.Response:
 	app = req.app
@@ -196,8 +218,9 @@ async def rekey_volume(req: web.Request) -> web.Response:
 	if not d:
 		return web.json_response({"ok": False, "error": "volume not found"}, status=404)
 	v = volume_from_state(d)
-	dek1 = _unhex(v.dek1_hex)
-	dek2 = _unhex(v.dek2_hex)
+	old_kek = _unhex(v.kek_hex)
+	dek1 = unwrap_dek_aes256gcm(v.wrapped_key, old_kek)
+	dek2 = unwrap_dek_aes256gcm(v.wrapped_key2, old_kek)
 	new_kek = _rand_bytes(32)
 	new_wrapped1 = wrap_dek_aes256gcm(dek1, new_kek)
 	new_wrapped2 = wrap_dek_aes256gcm(dek2, new_kek)
